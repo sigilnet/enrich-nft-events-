@@ -1,0 +1,15 @@
+log_level="info"
+streamer_pool_size=32
+topics=[]
+
+[kafka]
+"bootstrap.servers"="{{ BROKER_ENDPOINT }}"
+"security.protocol"="SASL_SSL"
+"sasl.mechanisms"="PLAIN"
+"sasl.username"="{{ CLUSTER_API_KEY }}"
+"sasl.password"="{{ CLUSTER_API_SECRET }}"
+"session.timeout.ms"="45000"
+"group.id"="enrich-nft-events"
+"enable.auto.commit"=false
+"enable.partition.eof"=false
+"auto.offset.reset"="earliest"
