@@ -1,18 +1,42 @@
 use crate::configs::AppConfig;
 use futures::StreamExt;
 use rdkafka::{
-    consumer::{Consumer, StreamConsumer},
-    message::OwnedMessage,
+    consumer::{CommitMode, Consumer, StreamConsumer},
+    error::KafkaResult,
+    message::BorrowedMessage,
 };
 use tokio::sync::mpsc::{self, error::SendError};
 use tracing::{error, warn};
 
-pub async fn start(
-    messages_sink: mpsc::Sender<OwnedMessage>,
+pub struct StreamerMessage<'a> {
+    pub message: BorrowedMessage<'a>,
+    consumer: &'a StreamConsumer,
+}
+
+impl<'a> StreamerMessage<'a> {
+    pub fn commit(&self) -> KafkaResult<()> {
+        self.consumer
+            .commit_message(&self.message, CommitMode::Sync)
+    }
+}
+
+pub fn init_streamer(
+    consumer: &'static StreamConsumer,
+    config: AppConfig,
+) -> (
+    tokio::task::JoinHandle<Result<(), anyhow::Error>>,
+    mpsc::Receiver<StreamerMessage>,
+) {
+    let (sender, receiver) = mpsc::channel(config.streamer_pool_size);
+    (tokio::spawn(start(consumer, sender, config)), receiver)
+}
+
+async fn start(
+    consumer: &'static StreamConsumer,
+    messages_sink: mpsc::Sender<StreamerMessage<'static>>,
     config: AppConfig,
 ) -> anyhow::Result<()> {
     let topics: Vec<&str> = config.topics.iter().map(|s| s.as_ref()).collect();
-    let consumer: StreamConsumer = config.kafka_config.create()?;
 
     consumer.subscribe(&topics.to_vec())?;
     let mut stream = consumer.stream();
@@ -21,8 +45,13 @@ pub async fn start(
         match message_result {
             Err(e) => warn!("Kafka error: {}", e),
             Ok(borrowed_message) => {
-                let message = borrowed_message.detach();
-                if let Err(SendError(_)) = messages_sink.send(message).await {
+                if let Err(SendError(_)) = messages_sink
+                    .send(StreamerMessage {
+                        message: borrowed_message,
+                        consumer,
+                    })
+                    .await
+                {
                     error!(target: crate::APP, "Channel closed, exiting");
                     return Ok(());
                 }

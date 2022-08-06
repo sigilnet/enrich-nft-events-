@@ -4,10 +4,10 @@ use clap::Parser;
 use configs::{AppConfig, Opts};
 use futures::StreamExt;
 use openssl_probe::init_ssl_cert_env_vars;
+use rdkafka::consumer::StreamConsumer;
 use rdkafka::message::Message;
-use rdkafka::message::OwnedMessage;
-use streamer::start;
-use tokio::sync::mpsc;
+use streamer::init_streamer;
+use streamer::StreamerMessage;
 use tracing::{debug, info};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::FmtSubscriber;
@@ -26,7 +26,11 @@ async fn main() -> anyhow::Result<()> {
 
     init_tracer(&config);
 
-    let (sender, stream) = streamer(config);
+    let consumer: StreamConsumer = config.kafka_config.create()?;
+    let consumer_box = Box::new(consumer);
+    let consumer_ref: &'static mut StreamConsumer = Box::leak(consumer_box);
+
+    let (sender, stream) = init_streamer(consumer_ref, config);
     info!("Start streamer...");
 
     let mut handlers = tokio_stream::wrappers::ReceiverStream::new(stream)
@@ -44,16 +48,6 @@ async fn main() -> anyhow::Result<()> {
         Ok(Err(e)) => Err(e),
         Err(e) => Err(anyhow::Error::from(e)), // JoinError
     }
-}
-
-pub fn streamer(
-    config: AppConfig,
-) -> (
-    tokio::task::JoinHandle<Result<(), anyhow::Error>>,
-    mpsc::Receiver<OwnedMessage>,
-) {
-    let (sender, receiver) = mpsc::channel(config.streamer_pool_size);
-    (tokio::spawn(start(sender, config)), receiver)
 }
 
 fn init_tracer(config: &AppConfig) {
@@ -79,7 +73,11 @@ fn init_tracer(config: &AppConfig) {
         .init();
 }
 
-async fn handle_message(message: OwnedMessage) -> anyhow::Result<()> {
-    debug!("Received kafka message: {:?}", message.offset());
+async fn handle_message(streamer_message: StreamerMessage<'static>) -> anyhow::Result<()> {
+    debug!(
+        "Received kafka message: {:?}",
+        streamer_message.message.offset()
+    );
+    streamer_message.commit()?;
     Ok(())
 }
