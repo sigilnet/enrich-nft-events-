@@ -1,6 +1,11 @@
+near_node_url="http://localhost:3030"
 log_level="info"
 streamer_pool_size=32
 topics=[]
+topic_output_suffix="extra"
+force_create_new_topic=false
+new_topic_partitions=1
+new_topic_replication=3
 
 [kafka]
 "bootstrap.servers"="{{ BROKER_ENDPOINT }}"

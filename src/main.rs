@@ -2,9 +2,8 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use configs::{AppConfig, Opts};
-use event_types::NearEvent;
-use event_types::Nep171EventKind;
 use futures::StreamExt;
+use near_jsonrpc_client::JsonRpcClient;
 use openssl_probe::init_ssl_cert_env_vars;
 use rdkafka::message::BorrowedMessage;
 use rdkafka::message::Message;
@@ -15,9 +14,14 @@ use tracing::warn;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::FmtSubscriber;
 
+use crate::rpc_client::get_nft_token;
+use crate::token::Token;
+
 mod configs;
-mod event_types;
+mod rpc_client;
+mod sender;
 mod streamer;
+mod token;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -25,14 +29,18 @@ async fn main() -> anyhow::Result<()> {
 
     let opts: Opts = Opts::parse();
     let config = AppConfig::new(PathBuf::from(opts.home_dir))?;
+    let config_box = Box::new(config);
+    let config_ref: &'static mut AppConfig = Box::leak(config_box);
 
-    init_tracer(&config);
+    init_tracer(config_ref);
 
-    let (sender, stream) = init_streamer(config)?;
+    let rpc_client = rpc_client::init_client(config_ref);
+    let (sender, stream) = init_streamer(config_ref)?;
+
     info!("Start streamer...");
 
     let mut handlers = tokio_stream::wrappers::ReceiverStream::new(stream)
-        .map(handle_message)
+        .map(|m| handle_message(m, &rpc_client, config_ref))
         .buffer_unordered(usize::from(opts.concurrency.get()));
 
     while let Some(handle_message) = handlers.next().await {
@@ -71,18 +79,17 @@ fn init_tracer(config: &AppConfig) {
         .init();
 }
 
-fn parse_event(message: &BorrowedMessage) -> Option<NearEvent> {
+fn parse_event(message: &BorrowedMessage) -> Option<Token> {
     match message.payload_view::<str>() {
         Some(Ok(payload)) => {
-            let event = serde_json::from_str::<'_, NearEvent>(payload);
-            match event {
-                Ok(event) => Some(event),
+            let token = serde_json::from_str::<'_, Token>(payload);
+            match token {
+                Ok(token) => Some(token),
                 Err(err) => {
                     warn!(
-                    "Payload does not correspond to any of formats defined in NEP. Will ignore this event. \n {:#?} \n{:#?}",
-                    err,
-                    payload,
-                );
+                        "Payload does not correspond to NFT standard. \n {:?} \n{:?}",
+                        err, payload,
+                    );
                     None
                 }
             }
@@ -98,25 +105,43 @@ fn parse_event(message: &BorrowedMessage) -> Option<NearEvent> {
     }
 }
 
-async fn handle_message(streamer_message: StreamerMessage<'static>) -> anyhow::Result<()> {
-    let event = parse_event(&streamer_message.message);
-    if let Some(event) = event {
-        match event {
-            NearEvent::Nep171(nep171) => match nep171.event_kind {
-                Nep171EventKind::NftMint(v) => {
-                    for data in v {
-                        info!("[nft_mint] fetching metadata for: {:?}", data.token_ids);
+async fn handle_message(
+    streamer_message: StreamerMessage<'static>,
+    rpc_client: &JsonRpcClient,
+    config: &'static AppConfig,
+) -> anyhow::Result<()> {
+    let token = parse_event(&streamer_message.message);
+    if let Some(mut token) = token {
+        if let Some(ref contract_id) = token.contract_account_id {
+            let full_token = get_nft_token(rpc_client, contract_id, &token.token_id).await?;
+            if let Some(full_token) = full_token {
+                token.metadata = full_token.metadata;
+                if let Some(ref metadata) = token.metadata {
+                    if let Some(ref extra_str) = metadata.extra {
+                        let extra = serde_json::from_str::<'_, serde_json::Value>(extra_str).ok();
+                        token.metadata_extra = extra;
                     }
                 }
-                Nep171EventKind::NftTransfer(v) => {
-                    for data in v {
-                        info!("[nft_transfer] fetching metadata for: {:?}", data.token_ids);
-                    }
-                }
-                Nep171EventKind::NftBurn(data) => {
-                    warn!("[nft_burn] unhandled: {:?}", data);
-                }
-            },
+                let _id = format!("{}:{}", contract_id, token.token_id);
+                token._id = Some(_id.clone());
+                let event_payload = serde_json::to_string(&token)?;
+                let event_topic = format!(
+                    "{}_{}",
+                    streamer_message.message.topic(),
+                    config.topic_output_suffix
+                );
+                info!("Token after enrich: {}", event_payload);
+                streamer_message
+                    .send(config, &event_topic, &_id, &event_payload)
+                    .await?;
+            } else {
+                warn!(
+                    "Could not fetch token for: {:?} -> ${:?}",
+                    &contract_id, &token.token_id
+                );
+            }
+        } else {
+            warn!("Token don't have contract_account_id: {:?}", token);
         }
     }
     streamer_message.commit()?;

@@ -27,6 +27,16 @@ pub struct AppConfig {
     pub streamer_pool_size: usize,
 
     pub log_level: String,
+
+    pub near_node_url: String,
+
+    pub topic_output_suffix: String,
+
+    pub force_create_new_topic: bool,
+
+    pub new_topic_partitions: i32,
+
+    pub new_topic_replication: i32,
 }
 
 impl AppConfig {
