@@ -13,6 +13,12 @@ pub struct Token {
     pub contract_account_id: Option<String>,
 }
 
+impl Token {
+    pub fn build_id(contract_id: &str, token_id: &str) -> String {
+        format!("{}:{}", contract_id, token_id)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TokenMetadata {
     pub title: Option<String>,

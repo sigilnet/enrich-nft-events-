@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::Parser;
 use configs::{AppConfig, Opts};
 use futures::StreamExt;
-use near_jsonrpc_client::JsonRpcClient;
+use moka::future::Cache;
 use openssl_probe::init_ssl_cert_env_vars;
 use rdkafka::message::BorrowedMessage;
 use rdkafka::message::Message;
@@ -14,7 +14,7 @@ use tracing::warn;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::FmtSubscriber;
 
-use crate::rpc_client::get_nft_token;
+use crate::rpc_client::RpcClient;
 use crate::token::Token;
 
 mod configs;
@@ -31,16 +31,17 @@ async fn main() -> anyhow::Result<()> {
     let config = AppConfig::new(PathBuf::from(opts.home_dir))?;
     let config_box = Box::new(config);
     let config_ref: &'static mut AppConfig = Box::leak(config_box);
+    let cache = Cache::new(100_000);
 
     init_tracer(config_ref);
 
-    let rpc_client = rpc_client::init_client(config_ref);
+    let rpc_client = RpcClient::new(&config_ref.near_node_url, cache.clone());
     let (sender, stream) = init_streamer(config_ref)?;
 
     info!("Start streamer...");
 
     let mut handlers = tokio_stream::wrappers::ReceiverStream::new(stream)
-        .map(|m| handle_message(m, &rpc_client, config_ref))
+        .map(|m| handle_message(m, &rpc_client, cache.clone(), config_ref))
         .buffer_unordered(usize::from(opts.concurrency.get()));
 
     while let Some(handle_message) = handlers.next().await {
@@ -107,13 +108,16 @@ fn parse_event(message: &BorrowedMessage) -> Option<Token> {
 
 async fn handle_message(
     streamer_message: StreamerMessage<'static>,
-    rpc_client: &JsonRpcClient,
+    rpc_client: &RpcClient,
+    cache: Cache<String, String>,
     config: &'static AppConfig,
 ) -> anyhow::Result<()> {
     let token = parse_event(&streamer_message.message);
     if let Some(mut token) = token {
         if let Some(ref contract_id) = token.contract_account_id {
-            let full_token = get_nft_token(rpc_client, contract_id, &token.token_id).await?;
+            let full_token = rpc_client
+                .get_nft_token(contract_id, &token.token_id)
+                .await?;
             if let Some(full_token) = full_token {
                 token.metadata = full_token.metadata;
                 if let Some(ref metadata) = token.metadata {
@@ -122,7 +126,7 @@ async fn handle_message(
                         token.metadata_extra = extra;
                     }
                 }
-                let _id = format!("{}:{}", contract_id, token.token_id);
+                let _id = Token::build_id(contract_id, &token.token_id);
                 token._id = Some(_id.clone());
                 let event_payload = serde_json::to_string(&token)?;
                 let event_topic = format!(
@@ -131,6 +135,7 @@ async fn handle_message(
                     config.topic_output_suffix
                 );
                 info!("Token after enrich: {}", event_payload);
+                cache.insert(_id.clone(), event_payload.clone()).await;
                 streamer_message
                     .send(config, &event_topic, &_id, &event_payload)
                     .await?;
