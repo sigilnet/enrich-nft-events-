@@ -2,16 +2,21 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use configs::{AppConfig, Opts};
+use event_types::NearEvent;
+use event_types::Nep171EventKind;
 use futures::StreamExt;
 use openssl_probe::init_ssl_cert_env_vars;
+use rdkafka::message::BorrowedMessage;
 use rdkafka::message::Message;
 use streamer::init_streamer;
 use streamer::StreamerMessage;
-use tracing::{debug, info};
+use tracing::info;
+use tracing::warn;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::FmtSubscriber;
 
 mod configs;
+mod event_types;
 mod streamer;
 
 #[tokio::main]
@@ -66,11 +71,54 @@ fn init_tracer(config: &AppConfig) {
         .init();
 }
 
+fn parse_event(message: &BorrowedMessage) -> Option<NearEvent> {
+    match message.payload_view::<str>() {
+        Some(Ok(payload)) => {
+            let event = serde_json::from_str::<'_, NearEvent>(payload);
+            match event {
+                Ok(event) => Some(event),
+                Err(err) => {
+                    warn!(
+                    "Payload does not correspond to any of formats defined in NEP. Will ignore this event. \n {:#?} \n{:#?}",
+                    err,
+                    payload,
+                );
+                    None
+                }
+            }
+        }
+        Some(Err(_)) => {
+            warn!("Message payload is not a string");
+            None
+        }
+        None => {
+            warn!("Message has no payload");
+            None
+        }
+    }
+}
+
 async fn handle_message(streamer_message: StreamerMessage<'static>) -> anyhow::Result<()> {
-    debug!(
-        "Received kafka message: {:?}",
-        streamer_message.message.offset()
-    );
+    let event = parse_event(&streamer_message.message);
+    if let Some(event) = event {
+        match event {
+            NearEvent::Nep171(nep171) => match nep171.event_kind {
+                Nep171EventKind::NftMint(v) => {
+                    for data in v {
+                        info!("[nft_mint] fetching metadata for: {:?}", data.token_ids);
+                    }
+                }
+                Nep171EventKind::NftTransfer(v) => {
+                    for data in v {
+                        info!("[nft_transfer] fetching metadata for: {:?}", data.token_ids);
+                    }
+                }
+                Nep171EventKind::NftBurn(data) => {
+                    warn!("[nft_burn] unhandled: {:?}", data);
+                }
+            },
+        }
+    }
     streamer_message.commit()?;
     Ok(())
 }
