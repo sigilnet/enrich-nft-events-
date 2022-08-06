@@ -4,7 +4,6 @@ use clap::Parser;
 use configs::{AppConfig, Opts};
 use futures::StreamExt;
 use openssl_probe::init_ssl_cert_env_vars;
-use rdkafka::consumer::StreamConsumer;
 use rdkafka::message::Message;
 use streamer::init_streamer;
 use streamer::StreamerMessage;
@@ -15,8 +14,6 @@ use tracing_subscriber::FmtSubscriber;
 mod configs;
 mod streamer;
 
-pub const APP: &str = "enrich_nft_events";
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     init_ssl_cert_env_vars();
@@ -26,11 +23,7 @@ async fn main() -> anyhow::Result<()> {
 
     init_tracer(&config);
 
-    let consumer: StreamConsumer = config.kafka_config.create()?;
-    let consumer_box = Box::new(consumer);
-    let consumer_ref: &'static mut StreamConsumer = Box::leak(consumer_box);
-
-    let (sender, stream) = init_streamer(consumer_ref, config);
+    let (sender, stream) = init_streamer(config)?;
     info!("Start streamer...");
 
     let mut handlers = tokio_stream::wrappers::ReceiverStream::new(stream)

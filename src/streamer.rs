@@ -20,20 +20,27 @@ impl<'a> StreamerMessage<'a> {
     }
 }
 
+#[allow(clippy::type_complexity)]
 pub fn init_streamer(
-    consumer: &'static StreamConsumer,
     config: AppConfig,
-) -> (
+) -> anyhow::Result<(
     tokio::task::JoinHandle<Result<(), anyhow::Error>>,
-    mpsc::Receiver<StreamerMessage>,
-) {
+    mpsc::Receiver<StreamerMessage<'static>>,
+)> {
+    let consumer: StreamConsumer = config.kafka_config.create()?;
+    let consumer_box = Box::new(consumer);
+    let consumer_ref: &'static mut StreamConsumer = Box::leak(consumer_box);
+
     let (sender, receiver) = mpsc::channel(config.streamer_pool_size);
-    (tokio::spawn(start(consumer, sender, config)), receiver)
+
+    let sender = tokio::spawn(start(consumer_ref, sender, config));
+
+    Ok((sender, receiver))
 }
 
 async fn start(
     consumer: &'static StreamConsumer,
-    messages_sink: mpsc::Sender<StreamerMessage<'static>>,
+    sender: mpsc::Sender<StreamerMessage<'static>>,
     config: AppConfig,
 ) -> anyhow::Result<()> {
     let topics: Vec<&str> = config.topics.iter().map(|s| s.as_ref()).collect();
@@ -45,14 +52,14 @@ async fn start(
         match message_result {
             Err(e) => warn!("Kafka error: {}", e),
             Ok(borrowed_message) => {
-                if let Err(SendError(_)) = messages_sink
+                if let Err(SendError(_)) = sender
                     .send(StreamerMessage {
                         message: borrowed_message,
                         consumer,
                     })
                     .await
                 {
-                    error!(target: crate::APP, "Channel closed, exiting");
+                    error!("Channel closed, exiting");
                     return Ok(());
                 }
             }
