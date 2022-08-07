@@ -82,8 +82,11 @@ impl RpcClient {
         match response {
             Ok(response) => {
                 if let QueryResponseKind::CallResult(result) = response.kind {
-                    let token = from_slice::<Token>(&result.result)?;
-                    return Ok(Some(token));
+                    let token = from_slice::<Token>(&result.result);
+                    match token {
+                        Ok(token) => return Ok(Some(token)),
+                        Err(_) => return Ok(None),
+                    }
                 }
 
                 Ok(None)

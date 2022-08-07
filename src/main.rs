@@ -181,9 +181,9 @@ async fn handle_message(
     config: &AppConfig,
 ) -> anyhow::Result<()> {
     let token = parse_token(&streamer_message.message);
-    if let Some(ref token) = token {
-        if let Some(ref contract_id) = token.contract_account_id {
-            let enriched_token = enrich_metadata(rpc_client, token, contract_id).await?;
+    if let Some(token) = token {
+        if let Some(contract_id) = &token.contract_account_id {
+            let enriched_token = enrich_metadata(rpc_client, &token, contract_id).await?;
             send_enriched_token(
                 rpc_client,
                 producer,
