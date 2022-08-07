@@ -17,6 +17,24 @@ impl Token {
     pub fn build_id(contract_id: &str, token_id: &str) -> String {
         format!("{}:{}", contract_id, token_id)
     }
+
+    pub fn derive_id(&self) -> Option<String> {
+        self.contract_account_id
+            .clone()
+            .map(|contract_id| Self::build_id(&contract_id, &self.token_id))
+    }
+
+    pub fn set_id(&mut self) {
+        self._id = self.derive_id();
+    }
+
+    pub fn get_id(&self) -> Option<String> {
+        if self._id.is_some() {
+            return self._id.clone();
+        }
+
+        self.derive_id()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

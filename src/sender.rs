@@ -3,43 +3,33 @@ use std::time::Duration;
 use rdkafka::{
     admin::{AdminClient, AdminOptions, NewTopic, TopicReplication},
     client::DefaultClientContext,
-    consumer::{Consumer, StreamConsumer},
     producer::{FutureProducer, FutureRecord},
 };
 use tracing::{debug, info, warn};
 
-use crate::configs::AppConfig;
+use crate::{configs::AppConfig, streamer::StreamerMessage};
 
 pub async fn ensure_topic(
-    consumer: &StreamConsumer,
     admin_client: &AdminClient<DefaultClientContext>,
+    streamer_message: &StreamerMessage<'static>,
     config: &AppConfig,
     topic: &str,
 ) -> anyhow::Result<()> {
     if !config.force_create_new_topic {
         return Ok(());
     }
-    let metadata = consumer.fetch_metadata(None, Duration::from_secs(1));
+    let topics = streamer_message.fetch_all_topics();
 
-    if let Err(err) = &metadata {
-        warn!("Could not fetch Kafka metadata: {:?}", err);
+    if let Err(err) = &topics {
+        warn!("Could not fetch Kafka topics: {:?}", err);
         return Ok(());
     }
 
-    let metadata = metadata.unwrap();
+    let topic_names = topics.unwrap();
 
-    let topic_names = metadata
-        .topics()
-        .iter()
-        .map(|t| t.name())
-        .collect::<Vec<&str>>();
+    debug!("Kafka topics: {:?}", &topic_names);
 
-    debug!("Kafka topics: {:?}", topic_names);
-
-    let existed = metadata
-        .topics()
-        .iter()
-        .any(|topic_metadata| topic_metadata.name() == topic);
+    let existed = topic_names.iter().any(|topic_name| topic_name == topic);
 
     if !existed {
         let results = admin_client
@@ -65,14 +55,14 @@ pub async fn ensure_topic(
 
 pub async fn send_event(
     producer: &FutureProducer,
-    consumer: &StreamConsumer,
     admin_client: &AdminClient<DefaultClientContext>,
+    streamer_message: &StreamerMessage<'static>,
     config: &AppConfig,
     topic: &str,
     key: &str,
     payload: &str,
 ) -> anyhow::Result<()> {
-    ensure_topic(consumer, admin_client, config, topic).await?;
+    ensure_topic(admin_client, streamer_message, config, topic).await?;
 
     let delivery_status = producer
         .send(

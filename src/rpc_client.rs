@@ -21,17 +21,44 @@ impl RpcClient {
         }
     }
 
+    pub async fn update_cache(&self, key: String, value: String) {
+        self.cache.insert(key, value).await;
+    }
+
+    pub async fn update_nft_cache(&self, token: &Token) -> anyhow::Result<()> {
+        let key = token.get_id();
+        if let Some(key) = key {
+            let value = serde_json::to_string(&token)?;
+            self.update_cache(key, value).await;
+        }
+
+        Ok(())
+    }
+
+    pub fn get_nft_cache(
+        &self,
+        contract_id: &str,
+        token_id: &str,
+    ) -> anyhow::Result<Option<Token>> {
+        let key = Token::build_id(contract_id, token_id);
+        let value = self.cache.get(&key);
+        if let Some(value) = value {
+            info!("cache hit {}", &key);
+            let token: Token = serde_json::from_str(&value)?;
+            return Ok(Some(token));
+        }
+
+        Ok(None)
+    }
+
     pub async fn get_nft_token(
         &self,
         contract_id: &str,
         token_id: &str,
     ) -> anyhow::Result<Option<Token>> {
-        let cache_key = Token::build_id(contract_id, token_id);
-        let cache_value = self.cache.get(&cache_key);
-        if let Some(val) = cache_value {
-            info!("cache hit {}", &cache_key);
-            let token = serde_json::from_str::<'_, Token>(&val)?;
-            return Ok(Some(token));
+        let cache_token = self.get_nft_cache(contract_id, token_id)?;
+        if cache_token.is_some() {
+            return Ok(cache_token);
         }
 
         let request = RpcQueryRequest {

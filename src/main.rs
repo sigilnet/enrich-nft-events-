@@ -5,8 +5,11 @@ use configs::{AppConfig, Opts};
 use futures::StreamExt;
 use moka::future::Cache;
 use openssl_probe::init_ssl_cert_env_vars;
+use rdkafka::admin::AdminClient;
+use rdkafka::client::DefaultClientContext;
 use rdkafka::message::BorrowedMessage;
 use rdkafka::message::Message;
+use rdkafka::producer::FutureProducer;
 use streamer::init_streamer;
 use streamer::StreamerMessage;
 use tracing::info;
@@ -15,6 +18,7 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::FmtSubscriber;
 
 use crate::rpc_client::RpcClient;
+use crate::sender::send_event;
 use crate::token::Token;
 
 mod configs;
@@ -29,19 +33,20 @@ async fn main() -> anyhow::Result<()> {
 
     let opts: Opts = Opts::parse();
     let config = AppConfig::new(PathBuf::from(opts.home_dir))?;
-    let config_box = Box::new(config);
-    let config_ref: &'static mut AppConfig = Box::leak(config_box);
     let cache = Cache::new(100_000);
 
-    init_tracer(config_ref);
+    init_tracer(&config);
 
-    let rpc_client = RpcClient::new(&config_ref.near_node_url, cache.clone());
-    let (sender, stream) = init_streamer(config_ref)?;
+    let rpc_client = RpcClient::new("", cache.clone());
+    let (sender, stream) = init_streamer(&config)?;
+
+    let admin_client: AdminClient<DefaultClientContext> = config.kafka_config.create()?;
+    let producer: FutureProducer = config.kafka_config.create()?;
 
     info!("Start streamer...");
 
     let mut handlers = tokio_stream::wrappers::ReceiverStream::new(stream)
-        .map(|m| handle_message(m, &rpc_client, cache.clone(), config_ref))
+        .map(|m| handle_message(m, &rpc_client, &producer, &admin_client, &config))
         .buffer_unordered(usize::from(opts.concurrency.get()));
 
     while let Some(handle_message) = handlers.next().await {
@@ -80,10 +85,10 @@ fn init_tracer(config: &AppConfig) {
         .init();
 }
 
-fn parse_event(message: &BorrowedMessage) -> Option<Token> {
+fn parse_token(message: &BorrowedMessage) -> Option<Token> {
     match message.payload_view::<str>() {
         Some(Ok(payload)) => {
-            let token = serde_json::from_str::<'_, Token>(payload);
+            let token = serde_json::from_str::<Token>(payload);
             match token {
                 Ok(token) => Some(token),
                 Err(err) => {
@@ -106,47 +111,88 @@ fn parse_event(message: &BorrowedMessage) -> Option<Token> {
     }
 }
 
-async fn handle_message(
-    streamer_message: StreamerMessage<'static>,
+async fn enrich_metadata(
     rpc_client: &RpcClient,
-    cache: Cache<String, String>,
-    config: &'static AppConfig,
-) -> anyhow::Result<()> {
-    let token = parse_event(&streamer_message.message);
-    if let Some(mut token) = token {
-        if let Some(ref contract_id) = token.contract_account_id {
-            let full_token = rpc_client
-                .get_nft_token(contract_id, &token.token_id)
-                .await?;
-            if let Some(full_token) = full_token {
-                token.metadata = full_token.metadata;
-                if let Some(ref metadata) = token.metadata {
-                    if let Some(ref extra_str) = metadata.extra {
-                        let extra = serde_json::from_str::<'_, serde_json::Value>(extra_str).ok();
-                        token.metadata_extra = extra;
-                    }
-                }
-                let _id = Token::build_id(contract_id, &token.token_id);
-                token._id = Some(_id.clone());
-                let event_payload = serde_json::to_string(&token)?;
-                let event_topic = format!(
-                    "{}_{}",
-                    streamer_message.message.topic(),
-                    config.topic_output_suffix
-                );
-                info!("Token after enrich: {}", event_payload);
-                cache.insert(_id.clone(), event_payload.clone()).await;
-                streamer_message
-                    .send(config, &event_topic, &_id, &event_payload)
-                    .await?;
-            } else {
-                warn!(
-                    "Could not fetch token for: {:?} -> ${:?}",
-                    &contract_id, &token.token_id
-                );
+    token: &Token,
+    contract_id: &str,
+) -> anyhow::Result<Option<Token>> {
+    let full_token = rpc_client
+        .get_nft_token(contract_id, &token.token_id)
+        .await?;
+
+    if let Some(full_token) = full_token {
+        let mut enriched_token = token.clone();
+        enriched_token.set_id();
+        enriched_token.metadata = full_token.metadata;
+        if let Some(ref metadata) = token.metadata {
+            if let Some(ref extra) = metadata.extra {
+                enriched_token.metadata_extra = serde_json::from_str(extra).ok();
             }
+        }
+        return Ok(Some(enriched_token));
+    } else {
+        warn!("Could not fetch full token for: {:?}", &token);
+    }
+
+    Ok(None)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn send_enriched_token(
+    rpc_client: &RpcClient,
+    producer: &FutureProducer,
+    admin_client: &AdminClient<DefaultClientContext>,
+    streamer_message: &StreamerMessage<'static>,
+    config: &AppConfig,
+    enriched_token: &Option<Token>,
+    topic_input: &str,
+    topic_output_suffix: &str,
+) -> anyhow::Result<()> {
+    if let Some(token) = enriched_token {
+        let event_payload = serde_json::to_string(token)?;
+        let event_topic = format!("{}_{}", topic_input, topic_output_suffix);
+        let event_id = token.get_id().unwrap();
+        info!("Token after enriched: {}", event_payload);
+        rpc_client.update_nft_cache(token).await?;
+        send_event(
+            producer,
+            admin_client,
+            streamer_message,
+            config,
+            &event_topic,
+            &event_id,
+            &event_payload,
+        )
+        .await?;
+    }
+
+    Ok(())
+}
+
+async fn handle_message<'a>(
+    streamer_message: StreamerMessage<'static>,
+    rpc_client: &'a RpcClient,
+    producer: &'a FutureProducer,
+    admin_client: &'a AdminClient<DefaultClientContext>,
+    config: &'a AppConfig,
+) -> anyhow::Result<()> {
+    let token = parse_token(&streamer_message.message);
+    if let Some(ref token) = token {
+        if let Some(ref contract_id) = token.contract_account_id {
+            let enriched_token = enrich_metadata(rpc_client, token, contract_id).await?;
+            send_enriched_token(
+                rpc_client,
+                producer,
+                admin_client,
+                &streamer_message,
+                config,
+                &enriched_token,
+                streamer_message.message.topic(),
+                &config.topic_output_suffix,
+            )
+            .await?;
         } else {
-            warn!("Token don't have contract_account_id: {:?}", token);
+            warn!("Token doesn't have contract_account_id: {:?}", &token);
         }
     }
     streamer_message.commit()?;
