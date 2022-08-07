@@ -1,10 +1,11 @@
 use moka::future::Cache;
+use near_jsonrpc_client::errors::{JsonRpcError, JsonRpcTransportRecvError, RpcTransportError};
 use near_jsonrpc_client::{methods::query::RpcQueryRequest, JsonRpcClient};
 use near_jsonrpc_primitives::types::query::QueryResponseKind;
 use near_primitives::types::{BlockReference, Finality, FunctionArgs};
 use near_primitives::views::QueryRequest;
 use serde_json::{from_slice, json};
-use tracing::info;
+use tracing::{error, info, warn};
 
 use crate::token::Token;
 
@@ -76,13 +77,35 @@ impl RpcClient {
             },
         };
 
-        let response = self.client.call(request).await?;
+        let response = self.client.call(request).await;
 
-        if let QueryResponseKind::CallResult(result) = response.kind {
-            let token = from_slice::<Token>(&result.result)?;
-            return Ok(Some(token));
+        match response {
+            Ok(response) => {
+                if let QueryResponseKind::CallResult(result) = response.kind {
+                    let token = from_slice::<Token>(&result.result)?;
+                    return Ok(Some(token));
+                }
+
+                Ok(None)
+            }
+            Err(err) => match err {
+                JsonRpcError::TransportError(RpcTransportError::RecvError(
+                    JsonRpcTransportRecvError::ResponseParseError(err),
+                )) => {
+                    warn!(
+                        "rpc request handled error: {}, {}, {:?}",
+                        contract_id, token_id, err
+                    );
+                    Ok(None)
+                }
+                _ => {
+                    error!(
+                        "rpc request unhandled error: {}, {}, {:?}",
+                        contract_id, token_id, err
+                    );
+                    Err(anyhow::Error::from(err))
+                }
+            },
         }
-
-        Ok(None)
     }
 }
