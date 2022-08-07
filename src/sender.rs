@@ -11,7 +11,7 @@ use crate::{configs::AppConfig, streamer::StreamerMessage};
 
 pub async fn ensure_topic(
     admin_client: &AdminClient<DefaultClientContext>,
-    streamer_message: &StreamerMessage<'static>,
+    streamer_message: &StreamerMessage,
     config: &AppConfig,
     topic: &str,
 ) -> anyhow::Result<()> {
@@ -56,7 +56,7 @@ pub async fn ensure_topic(
 pub async fn send_event(
     producer: &FutureProducer,
     admin_client: &AdminClient<DefaultClientContext>,
-    streamer_message: &StreamerMessage<'static>,
+    streamer_message: &StreamerMessage,
     config: &AppConfig,
     topic: &str,
     key: &str,

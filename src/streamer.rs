@@ -1,24 +1,31 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use crate::configs::AppConfig;
 use futures::StreamExt;
 use rdkafka::{
     consumer::{CommitMode, Consumer, StreamConsumer},
     error::KafkaResult,
-    message::BorrowedMessage,
+    message::Message,
+    message::OwnedMessage,
+    ClientConfig, Offset, TopicPartitionList,
 };
 use tokio::sync::mpsc;
 use tracing::{error, warn};
 
-pub struct StreamerMessage<'a> {
-    pub message: BorrowedMessage<'a>,
-    consumer: &'a StreamConsumer,
+pub struct StreamerMessage {
+    pub message: OwnedMessage,
+    consumer: Arc<StreamConsumer>,
 }
 
-impl<'a> StreamerMessage<'a> {
+impl StreamerMessage {
     pub fn commit(&self) -> KafkaResult<()> {
-        self.consumer
-            .commit_message(&self.message, CommitMode::Sync)
+        let mut tpl = TopicPartitionList::new();
+        tpl.add_partition_offset(
+            self.message.topic(),
+            self.message.partition(),
+            Offset::Offset(self.message.offset()),
+        )?;
+        self.consumer.commit(&tpl, CommitMode::Sync)
     }
 
     pub fn fetch_all_topics(&self) -> anyhow::Result<Vec<String>> {
@@ -39,37 +46,41 @@ pub fn init_streamer(
     config: &AppConfig,
 ) -> anyhow::Result<(
     tokio::task::JoinHandle<Result<(), anyhow::Error>>,
-    mpsc::Receiver<StreamerMessage<'static>>,
+    mpsc::Receiver<StreamerMessage>,
 )> {
-    //TODO: refactor this
-    let consumer: StreamConsumer = config.kafka_config.create()?;
-    let consumer_box = Box::new(consumer);
-    let consumer_ref: &'static mut StreamConsumer = Box::leak(consumer_box);
-
     let (sender, receiver) = mpsc::channel(config.streamer_pool_size);
 
-    let sender = tokio::spawn(start(consumer_ref, sender, config.topics.clone()));
+    let sender = tokio::spawn(start(
+        sender,
+        config.kafka_config.clone(),
+        config.topics.clone(),
+    ));
 
     Ok((sender, receiver))
 }
 
 async fn start(
-    consumer: &'static StreamConsumer,
-    sender: mpsc::Sender<StreamerMessage<'static>>,
+    sender: mpsc::Sender<StreamerMessage>,
+    kafka_config: ClientConfig,
     topics: Vec<String>,
 ) -> anyhow::Result<()> {
+    let consumer: StreamConsumer = kafka_config.create()?;
+
     let topics_ref: Vec<&str> = topics.iter().map(|topic| topic.as_str()).collect();
     consumer.subscribe(&topics_ref.to_vec())?;
-    let mut stream = consumer.stream();
+
+    let consumer_arc = Arc::new(consumer);
+    let mut stream = consumer_arc.stream();
 
     while let Some(message_result) = stream.next().await {
         match message_result {
             Err(e) => warn!("Kafka error: {}", e),
             Ok(borrowed_message) => {
+                let message = borrowed_message.detach();
                 if let Err(err) = sender
                     .send(StreamerMessage {
-                        message: borrowed_message,
-                        consumer,
+                        message,
+                        consumer: consumer_arc.clone(),
                     })
                     .await
                 {

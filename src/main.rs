@@ -7,8 +7,8 @@ use moka::future::Cache;
 use openssl_probe::init_ssl_cert_env_vars;
 use rdkafka::admin::AdminClient;
 use rdkafka::client::DefaultClientContext;
-use rdkafka::message::BorrowedMessage;
 use rdkafka::message::Message;
+use rdkafka::message::OwnedMessage;
 use rdkafka::producer::FutureProducer;
 use streamer::init_streamer;
 use streamer::StreamerMessage;
@@ -85,7 +85,7 @@ fn init_tracer(config: &AppConfig) {
         .init();
 }
 
-fn parse_token(message: &BorrowedMessage) -> Option<Token> {
+fn parse_token(message: &OwnedMessage) -> Option<Token> {
     match message.payload_view::<str>() {
         Some(Ok(payload)) => {
             let token = serde_json::from_str::<Token>(payload);
@@ -142,7 +142,7 @@ async fn send_enriched_token(
     rpc_client: &RpcClient,
     producer: &FutureProducer,
     admin_client: &AdminClient<DefaultClientContext>,
-    streamer_message: &StreamerMessage<'static>,
+    streamer_message: &StreamerMessage,
     config: &AppConfig,
     enriched_token: &Option<Token>,
     topic_input: &str,
@@ -169,12 +169,12 @@ async fn send_enriched_token(
     Ok(())
 }
 
-async fn handle_message<'a>(
-    streamer_message: StreamerMessage<'static>,
-    rpc_client: &'a RpcClient,
-    producer: &'a FutureProducer,
-    admin_client: &'a AdminClient<DefaultClientContext>,
-    config: &'a AppConfig,
+async fn handle_message(
+    streamer_message: StreamerMessage,
+    rpc_client: &RpcClient,
+    producer: &FutureProducer,
+    admin_client: &AdminClient<DefaultClientContext>,
+    config: &AppConfig,
 ) -> anyhow::Result<()> {
     let token = parse_token(&streamer_message.message);
     if let Some(ref token) = token {
