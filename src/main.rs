@@ -37,7 +37,7 @@ async fn main() -> anyhow::Result<()> {
 
     init_tracer(&config);
 
-    let rpc_client = RpcClient::new("", cache.clone());
+    let rpc_client = RpcClient::new(&config.near_node_url, cache.clone());
     let (sender, stream) = init_streamer(&config)?;
 
     let admin_client: AdminClient<DefaultClientContext> = config.kafka_config.create()?;
@@ -124,7 +124,7 @@ async fn enrich_metadata(
         let mut enriched_token = token.clone();
         enriched_token.set_id();
         enriched_token.metadata = full_token.metadata;
-        if let Some(ref metadata) = token.metadata {
+        if let Some(ref metadata) = enriched_token.metadata {
             if let Some(ref extra) = metadata.extra {
                 enriched_token.metadata_extra = serde_json::from_str(extra).ok();
             }
@@ -152,7 +152,11 @@ async fn send_enriched_token(
         let event_payload = serde_json::to_string(token)?;
         let event_topic = format!("{}_{}", topic_input, topic_output_suffix);
         let event_id = token.get_id().unwrap();
-        info!("Token after enriched: {}", event_payload);
+        info!(
+            "Token after enriched, offset: {}, {}",
+            streamer_message.message.offset(),
+            event_payload
+        );
         rpc_client.update_nft_cache(token).await?;
         send_event(
             producer,

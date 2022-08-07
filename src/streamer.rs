@@ -23,7 +23,7 @@ impl StreamerMessage {
         tpl.add_partition_offset(
             self.message.topic(),
             self.message.partition(),
-            Offset::Offset(self.message.offset()),
+            Offset::Offset(self.message.offset() + 1),
         )?;
         self.consumer.commit(&tpl, CommitMode::Sync)
     }
