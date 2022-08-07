@@ -153,7 +153,8 @@ async fn send_enriched_token(
         let event_topic = format!("{}_{}", topic_input, topic_output_suffix);
         let event_id = token.get_id().unwrap();
         info!(
-            "Token after enriched, offset: {}, {}",
+            "Token after enriched, topic: {}, offset: {}, {}",
+            streamer_message.message.topic(),
             streamer_message.message.offset(),
             event_payload
         );

@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{sync::Arc, thread, time::Duration};
 
 use crate::configs::AppConfig;
 use futures::StreamExt;
@@ -7,6 +7,7 @@ use rdkafka::{
     error::KafkaResult,
     message::Message,
     message::OwnedMessage,
+    types::RDKafkaErrorCode,
     ClientConfig, Offset, TopicPartitionList,
 };
 use tokio::sync::mpsc;
@@ -25,7 +26,23 @@ impl StreamerMessage {
             self.message.partition(),
             Offset::Offset(self.message.offset() + 1),
         )?;
-        self.consumer.commit(&tpl, CommitMode::Sync)
+
+        loop {
+            let result = self.consumer.commit(&tpl, CommitMode::Sync);
+            match result {
+                Ok(()) => {
+                    return Ok(());
+                }
+                Err(err) => {
+                    if err.rdkafka_error_code() == Some(RDKafkaErrorCode::RebalanceInProgress) {
+                        warn!("RebalanceInProgress, retry after 5s");
+                        thread::sleep(Duration::from_secs(5));
+                        continue;
+                    }
+                    return Err(err);
+                }
+            }
+        }
     }
 
     pub fn fetch_all_topics(&self) -> anyhow::Result<Vec<String>> {
