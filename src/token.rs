@@ -35,10 +35,6 @@ impl Token {
 
         self.derive_id()
     }
-
-    pub fn to_key(&self) -> Option<String> {
-        self.contract_account_id.clone()
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
