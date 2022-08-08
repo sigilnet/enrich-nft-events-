@@ -1,4 +1,4 @@
-use std::{sync::Arc, thread, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use crate::configs::AppConfig;
 use futures::StreamExt;
@@ -19,7 +19,7 @@ pub struct StreamerMessage {
 }
 
 impl StreamerMessage {
-    pub fn commit(&self) -> KafkaResult<()> {
+    pub async fn commit(&self) -> KafkaResult<()> {
         let mut tpl = TopicPartitionList::new();
         tpl.add_partition_offset(
             self.message.topic(),
@@ -36,7 +36,7 @@ impl StreamerMessage {
                 Err(err) => {
                     if err.rdkafka_error_code() == Some(RDKafkaErrorCode::RebalanceInProgress) {
                         warn!("RebalanceInProgress, retry after 5s");
-                        thread::sleep(Duration::from_secs(5));
+                        tokio::time::sleep(Duration::from_secs(5)).await;
                         continue;
                     }
                     return Err(err);

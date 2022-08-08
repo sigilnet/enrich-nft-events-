@@ -200,6 +200,6 @@ async fn handle_message(
             warn!("Token doesn't have contract_account_id: {:?}", &token);
         }
     }
-    streamer_message.commit()?;
+    streamer_message.commit().await?;
     Ok(())
 }
