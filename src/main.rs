@@ -151,7 +151,7 @@ async fn send_enriched_token(
     if let Some(token) = enriched_token {
         let event_payload = serde_json::to_string(token)?;
         let event_topic = format!("{}_{}", topic_input, topic_output_suffix);
-        let event_id = token.get_id().unwrap();
+        let event_key = token.to_key().unwrap();
         info!(
             "Token after enriched, topic: {}, offset: {}, {}",
             streamer_message.message.topic(),
@@ -165,7 +165,7 @@ async fn send_enriched_token(
             streamer_message,
             config,
             &event_topic,
-            &event_id,
+            &event_key,
             &event_payload,
         )
         .await?;
