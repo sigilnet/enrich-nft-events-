@@ -24,13 +24,15 @@ pub struct AppConfig {
 
     pub topics: Vec<String>,
 
-    pub streamer_pool_size: usize,
+    pub topic_output_suffix: String,
+
+    pub group_id: String,
+
+    pub auto_offset_reset: String,
 
     pub log_level: String,
 
     pub near_node_url: String,
-
-    pub topic_output_suffix: String,
 
     pub force_create_new_topic: bool,
 

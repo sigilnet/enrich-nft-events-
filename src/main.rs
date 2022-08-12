@@ -4,14 +4,15 @@ use clap::Parser;
 use configs::{AppConfig, Opts};
 use futures::StreamExt;
 use moka::future::Cache;
+use near_event_stream_processor::config::StreamerConfigBuilder;
+use near_event_stream_processor::message::StreamerMessage;
+use near_event_stream_processor::streamer;
 use openssl_probe::init_ssl_cert_env_vars;
 use rdkafka::admin::AdminClient;
 use rdkafka::client::DefaultClientContext;
 use rdkafka::message::Message;
 use rdkafka::message::OwnedMessage;
 use rdkafka::producer::FutureProducer;
-use streamer::init_streamer;
-use streamer::StreamerMessage;
 use tracing::info;
 use tracing::warn;
 use tracing_subscriber::EnvFilter;
@@ -24,7 +25,6 @@ use crate::token::Token;
 mod configs;
 mod rpc_client;
 mod sender;
-mod streamer;
 mod token;
 
 #[tokio::main]
@@ -33,12 +33,20 @@ async fn main() -> anyhow::Result<()> {
 
     let opts: Opts = Opts::parse();
     let config = AppConfig::new(PathBuf::from(opts.home_dir))?;
-    let cache = Cache::new(100_000);
 
     init_tracer(&config);
 
+    let cache = Cache::new(100_000);
     let rpc_client = RpcClient::new(&config.near_node_url, cache.clone());
-    let (sender, stream) = init_streamer(&config)?;
+
+    let streamer_config = StreamerConfigBuilder::default()
+        .kafka_config(config.kafka.clone())
+        .group_id(config.group_id.clone())
+        .auto_offset_reset(config.auto_offset_reset.clone())
+        .topics(config.topics.clone())
+        .build()?;
+
+    let (sender, stream) = streamer(&streamer_config)?;
 
     let admin_client: AdminClient<DefaultClientContext> = config.kafka_config.create()?;
     let producer: FutureProducer = config.kafka_config.create()?;

@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use near_event_stream_processor::message::StreamerMessage;
 use rdkafka::{
     admin::{AdminClient, AdminOptions, NewTopic, TopicReplication},
     client::DefaultClientContext,
@@ -7,7 +8,7 @@ use rdkafka::{
 };
 use tracing::{debug, info, warn};
 
-use crate::{configs::AppConfig, streamer::StreamerMessage};
+use crate::configs::AppConfig;
 
 pub async fn ensure_topic(
     admin_client: &AdminClient<DefaultClientContext>,
