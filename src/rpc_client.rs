@@ -1,5 +1,7 @@
 use moka::future::Cache;
-use near_jsonrpc_client::errors::{JsonRpcError, JsonRpcTransportRecvError, RpcTransportError};
+use near_jsonrpc_client::errors::{
+    JsonRpcError, JsonRpcServerError, JsonRpcTransportRecvError, RpcTransportError,
+};
 use near_jsonrpc_client::{methods::query::RpcQueryRequest, JsonRpcClient};
 use near_jsonrpc_primitives::types::query::QueryResponseKind;
 use near_primitives::types::{BlockReference, Finality, FunctionArgs};
@@ -95,6 +97,13 @@ impl RpcClient {
                 JsonRpcError::TransportError(RpcTransportError::RecvError(
                     JsonRpcTransportRecvError::ResponseParseError(err),
                 )) => {
+                    warn!(
+                        "rpc request handled error: {}, {}, {:?}",
+                        contract_id, token_id, err
+                    );
+                    Ok(None)
+                }
+                JsonRpcError::ServerError(JsonRpcServerError::HandlerError(err)) => {
                     warn!(
                         "rpc request handled error: {}, {}, {:?}",
                         contract_id, token_id, err
