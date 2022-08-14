@@ -5,7 +5,7 @@ authors = ["Sigil Network <contact@sigilnet.com>"]
 edition = "2021"
 
 [dependencies]
-near-event-stream-processor = { git = "https://github.com/sigilnet/near-event-stream-processor-rs.git", rev = "cd64c3902d2e64ee492037a15ba0550c1108dbd0" }
+near-event-stream-processor = "0.0.1"
 openssl = { version = "0.10", features = ["vendored"] }
 openssl-probe = "0.1.5"
 tokio = { version = "1.1", features = ["full"] }

@@ -1510,7 +1510,8 @@ dependencies = [
 [[package]]
 name = "near-event-stream-processor"
 version = "0.0.1"
-source = "git+https://github.com/sigilnet/near-event-stream-processor-rs.git?rev=cd64c3902d2e64ee492037a15ba0550c1108dbd0#cd64c3902d2e64ee492037a15ba0550c1108dbd0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c1c9915286373e9906e29677bbbc2d3a30fb2f9e8d1c9d27df796cef218e0ea9"
 dependencies = [
  "anyhow",
  "derive_builder",
