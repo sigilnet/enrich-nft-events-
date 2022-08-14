@@ -11,7 +11,6 @@ use openssl_probe::init_ssl_cert_env_vars;
 use rdkafka::admin::AdminClient;
 use rdkafka::client::DefaultClientContext;
 use rdkafka::message::Message;
-use rdkafka::message::OwnedMessage;
 use rdkafka::producer::FutureProducer;
 use tracing::info;
 use tracing::warn;
@@ -93,27 +92,12 @@ fn init_tracer(config: &AppConfig) {
         .init();
 }
 
-fn parse_token(message: &OwnedMessage) -> Option<Token> {
-    match message.payload_view::<str>() {
-        Some(Ok(payload)) => {
-            let token = serde_json::from_str::<Token>(payload);
-            match token {
-                Ok(token) => Some(token),
-                Err(err) => {
-                    warn!(
-                        "Payload does not correspond to NFT standard. \n {:?} \n{:?}",
-                        err, payload,
-                    );
-                    None
-                }
-            }
-        }
-        Some(Err(_)) => {
-            warn!("Message payload is not a string");
-            None
-        }
-        None => {
-            warn!("Message has no payload");
+fn parse_token(message: &StreamerMessage) -> Option<Token> {
+    let token = message.event::<Token>();
+    match token {
+        Ok(token) => Some(token),
+        Err(err) => {
+            warn!("Parse token error: {:?}", err);
             None
         }
     }
@@ -189,7 +173,7 @@ async fn handle_message(
     admin_client: &AdminClient<DefaultClientContext>,
     config: &AppConfig,
 ) -> anyhow::Result<()> {
-    let token = parse_token(&streamer_message.message);
+    let token = parse_token(&streamer_message);
     if let Some(token) = token {
         if let Some(contract_id) = &token.contract_account_id {
             let enriched_token = enrich_metadata(rpc_client, &token, contract_id).await?;
